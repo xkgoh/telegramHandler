@@ -13,6 +13,7 @@ APPROVED_USER_STR = os.environ['APPROVED_USER_LIST']
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 
 
+# Compute the distance between two pairs of coordinates
 def compute_distance(latitude_A, longitude_A, latitude_B, longitude_B):
     location_A = (latitude_A, longitude_A)
     location_B = (latitude_B, longitude_B)
@@ -123,8 +124,24 @@ def format_json_response(json_response, center, radius, original_merchant_length
 def lambda_handler(event, context):
     try:
         print "Initializaing Handler"
-
         data = json.loads(event["body"])
+        print event
+
+        if "callback_query" in data:
+            print "executing call back query"
+            BASE_URL = "https://api.telegram.org/bot{}".format(TOKEN)
+            reply_url = BASE_URL + "/answerCallbackQuery"
+            callback_query_id = data["callback_query"]["id"]
+            reply_data = {"callback_query_id": callback_query_id}
+            requests.post(reply_url, reply_data)
+            print "executed callback query"
+            reply_url = BASE_URL + "/editMessageText"
+            source_message_id = data["callback_query"]["message"]["message_id"]
+            source_chat_id = data["callback_query"]["message"]["chat"]["id"]
+            reply_data = {"chat_id": source_chat_id, "message_id": source_message_id, "text": "GOOD GOOD"}
+            post_reply = requests.post(reply_url, reply_data)
+            print str(post_reply.text)
+            return
 
         # If it is replying to a message not sent by the chatbot, ignore it
         if "reply_to_message" in data["message"]:
@@ -216,8 +233,13 @@ def lambda_handler(event, context):
             markdown_reply = format_json_response(json_response, message["location"], search_parameters['radius'], original_merchant_length)
             # print markdown_reply
             print "size of markdown reply" + str(sys.getsizeof(markdown_reply))
+
+            reply_markup={"inline_keyboard":[[{"text": "1", "callback_data": "test1"}]]}
+
+
             # data = {"text": markdown_reply.encode("utf8"), "chat_id": chat_id, "parse_mode": "markdown", "disable_web_page_preview": True}
-            data = {"text": markdown_reply.encode("utf8"), "chat_id": chat_id, "parse_mode": "markdown", "reply_to_message_id": source_message_id}
+            data = {"text": markdown_reply.encode("utf8"), "chat_id": chat_id, "parse_mode": "markdown",
+                    "reply_to_message_id": source_message_id, "reply_markup": json.dumps(reply_markup)}
             post_reply = requests.post(reply_url, data)
             print str(post_reply.text)
             print "Lambda client invoked"
