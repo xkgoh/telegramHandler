@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import math
+import re
 from geopy.distance import geodesic
 import telegramHandlerDBWriter
 
@@ -21,7 +22,21 @@ def compute_distance(latitude_A, longitude_A, latitude_B, longitude_B):
     location_B = (latitude_B, longitude_B)
     return geodesic(location_A, location_B).meters
 
+def condense_offer_description(text):
+    if re.search("SGD\d+ return voucher", text) is not None:
+        text = re.search("SGD\d+ return voucher", text).group()
+        text = text.replace('SGD', '$', 1).strip()
+        text = text.replace('return ', '', 1).strip()
+        return text.strip()
+    if re.search("\d+% off", text) is not None:
+        text = re.search("\d+% off", text).group()
+        return text.strip()
+    if re.search("SGD\d+ off", text) is not None:
+        text = re.search("SGD\d+ off", text).group().replace('SGD', '$', 1). strip()
+    return text.strip()
 
+
+# Obtain the results of a given page number from the entire result set
 def paginate_results(json_response, page_number):
     print "Paginating results."
     print json_response
@@ -31,12 +46,8 @@ def paginate_results(json_response, page_number):
                     'searchCenterLongitude': json_response['searchCenterLongitude']}
     json_location_temp_arr = []
 
-    print "check 1"
-
     start_index = min((page_number-1)*MAX_NUM_RESULTS_PER_PAGE, len(json_response['locations']))  # Index starts from 0
     end_index = min(page_number*MAX_NUM_RESULTS_PER_PAGE, len(json_response['locations']))  # Index ends at length-1
-
-    print "check 2"
 
     if (start_index == end_index and start_index == len(json_response['locations'])):
         print "No contents for this page"
@@ -45,14 +56,13 @@ def paginate_results(json_response, page_number):
     for i in range(start_index, end_index):
         json_location_temp_arr.append(json_response['locations'][i])
 
-    print "check 3"
-
     json_result['locations'] = json_location_temp_arr
     json_result['startItemNumber'] = start_index + 1
     json_result['endItemNumber'] = end_index
     json_result['totalItems'] = len(json_response['locations'])
     print "Paginating completed."
     return json_result
+
 
 # Filter merchant details based on the top_N closest merchant from the center
 def sort_results_by_distance(json_response, center_lat_lng):
@@ -127,21 +137,21 @@ def format_json_response(json_response):
         onemap_url = onemap_url + "|[" + str(latitude) + "," + str(longitude) + ",%22" + marker_colour + "%22,%22" + counter + "%22]"
 
         # Output the remaining details
-        output_string = output_string + "***" + counter + ". " + str(location['Name']['S']) + "*** ["+ location_emoji + "](http://maps.google.com/maps?q=loc:" + str(latitude) + "," + str(longitude) + ") "
+        output_string = output_string + "***" + counter + ". " + str(location['Name']['S']) + "*** ["+ location_emoji + "](http://maps.google.com/maps?q=loc:" + str(latitude) + "," + str(longitude) + ")"
 
         data_source = int(location['Source']['N'])
         additional_details = json.loads(str(location['AdditionalDetails']['S']))
 
         # Print the data source
         if data_source == 1:
-            output_string = output_string + "[(Entnr)](" + str(additional_details['SourceWebsite']) + ")"
+            output_string = output_string + "[(Entertainer)](" + str(additional_details['SourceWebsite']) + ")"
         elif data_source == 2:
             output_string = output_string + "[(Citi)](" + str(additional_details['SourceWebsite']) + ")"
 
         # Print additional info about discount/deal
         if additional_details.get('OfferDetails') and len(str(additional_details['OfferDetails'])) < 100:
-            output_string = output_string + "\n" + str(additional_details['OfferDetails'])
-        output_string = output_string + "\n\n"
+            output_string = output_string + " - " + condense_offer_description(str(additional_details['OfferDetails']))
+        output_string = output_string + "\n"
         if counter == 'Z':
             counter = 'a'
         if counter == 'z':
@@ -149,11 +159,7 @@ def format_json_response(json_response):
         counter = chr(ord(counter)+1) # Increment to the next alphabet
 
     # Add in the onemap_url
-    # if original_merchant_length != len(locations['locations']):
     output_string = "*Cheapo found*[ ](" + onemap_url + ")*" + str(json_response['totalItems']) + " results in a " + str(json_response['searchRadius']) + "m radius!*\nDisplaying results " + str(json_response['startItemNumber']) + " to " + str(json_response['endItemNumber']) + "\n\n" + output_string
-    # else:
-    #     output_string = "*Cheapo found*[ ](" + onemap_url + ")*" + str(len(locations['locations'])) + " results in a " + str(radius) + "m radius!*\n\n" + output_string
-    # print output_string
     return output_string
 
 
@@ -201,8 +207,6 @@ def lambda_handler(event, context):
             print markdown_reply
 
             reply_markup = create_reply_markup(current_page, int(math.ceil(float(json_response['totalItems'])/float(MAX_NUM_RESULTS_PER_PAGE))))
-
-            # reply_markup = {"inline_keyboard":[[{"text": "Page "+str(current_page+1), "callback_data": current_page+1}]]}
             reply_data = {"chat_id": source_chat_id, "message_id": source_message_id, "text": markdown_reply.encode("utf8"), "parse_mode": "markdown", "reply_markup": json.dumps(reply_markup)}
             post_reply = requests.post(reply_url, reply_data)
             print str(post_reply.text)
