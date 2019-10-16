@@ -147,6 +147,9 @@ def format_json_response(json_response):
             output_string = output_string + "[(Entertainer)](" + str(additional_details['SourceWebsite']) + ")"
         elif data_source == 2:
             output_string = output_string + "[(Citi)](" + str(additional_details['SourceWebsite']) + ")"
+        elif data_source == 3:
+            output_string = output_string + "[(OCBC)](" + str(additional_details['SourceWebsite']) + ")"
+
 
         # Print additional info about discount/deal
         if additional_details.get('OfferDetails') and len(str(additional_details['OfferDetails'])) < 100:
@@ -174,12 +177,15 @@ def invoke_lambda_function(function_name, invocation_type, payload_string):
 
 # Create the reply markup keyboard based on the page number
 def create_reply_markup(current_page, max_page):
+    print "Current Page: " + str(current_page) + " Max Page:" + str(max_page)
+    if current_page == max_page == 1:  # If there is only 1 page
+        return {}
     reply_markup = {}
     if 1 < current_page < max_page:
         reply_markup = {"inline_keyboard": [[{"text": "Page " + str(current_page - 1), "callback_data": current_page - 1}, {"text": "Page " + str(current_page + 1), "callback_data": current_page + 1}]]}
-    elif current_page == 1:
+    elif current_page == 1:  # If first page
         reply_markup = {"inline_keyboard": [[{"text": "Page " + str(current_page + 1), "callback_data": current_page + 1}]]}
-    elif current_page == max_page:
+    elif current_page == max_page:  # If last page
         reply_markup = {"inline_keyboard": [[{"text": "Page " + str(current_page - 1), "callback_data": current_page - 1}]]}
     return reply_markup
 
@@ -303,13 +309,16 @@ def lambda_handler(event, context):
             # print "after reducing radius is " + str(len(json_response['locations']))
             # markdown_reply = format_json_response(json_response, message["location"], search_parameters['radius'], original_merchant_length)
             markdown_reply = format_json_response(json_response)
+
             # print markdown_reply
             print "size of markdown reply" + str(sys.getsizeof(markdown_reply))
 
-            reply_markup={"inline_keyboard":[[{"text": "Page 2", "callback_data": 2}]]}
+            # reply_markup={"inline_keyboard":[[{"text": "Page 2", "callback_data": 2}]]}
+            print "total item " + str(json_response['totalItems'])
 
+            reply_markup = create_reply_markup(1, int(
+                math.ceil(float(json_response['totalItems']) / float(MAX_NUM_RESULTS_PER_PAGE))))
 
-            # data = {"text": markdown_reply.encode("utf8"), "chat_id": chat_id, "parse_mode": "markdown", "disable_web_page_preview": True}
             data = {"text": markdown_reply.encode("utf8"), "chat_id": chat_id, "parse_mode": "markdown",
                     "reply_to_message_id": source_message_id, "reply_markup": json.dumps(reply_markup)}
             post_reply = requests.post(reply_url, data)
