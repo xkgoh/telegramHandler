@@ -123,6 +123,7 @@ def format_json_response(json_response):
     counter = 'A'
     marker_colour = "144,238,144"  # Light green colour
     location_emoji = u'\U0001F4CD'  # Location pin
+    sources_available = set()
 
     for location in locations['locations']:
 
@@ -141,10 +142,13 @@ def format_json_response(json_response):
         # Print the data source
         if data_source == 1:
             output_string = output_string + "[(Entertainer)](" + str(additional_details['SourceWebsite']) + ")"
+            sources_available.add("ENTR")
         elif data_source == 2:
             output_string = output_string + "[(Citi)](" + str(additional_details['SourceWebsite']) + ")"
+            sources_available.add("CITI")
         elif data_source == 3:
             output_string = output_string + "[(OCBC)](" + str(additional_details['SourceWebsite']) + ")"
+            sources_available.add("OCBC")
 
 
         # Print additional info about discount/deal
@@ -159,4 +163,4 @@ def format_json_response(json_response):
 
     # Add in the onemap_url
     output_string = "*Cheapo found*[ ](" + onemap_url + ")*" + str(json_response['totalItems']) + " results in a " + str(json_response['searchRadius']) + "m radius!*\nDisplaying results " + str(json_response['startItemNumber']) + " to " + str(json_response['endItemNumber']) + "\n\n" + output_string
-    return output_string
+    return output_string, sources_available
