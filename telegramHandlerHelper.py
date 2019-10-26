@@ -47,14 +47,22 @@ def sort_results_by_distance(json_response, center_lat_lng):
 # B. Filter Related Methods #########
 
 # Filter the merchant categories to that listed in the APPROVED_CATEGORY variable
-def filter_merchant_category(json_response):
+def filter_merchant_category(json_response, data_sources):
     json_result = {'searchRadius': json_response['searchRadius']}
     json_location_filtered_arr = []
 
+
     for merchant in json_response['locations']:
         merchant_category = int(merchant['Type']['N'])
-        if merchant_category in APPROVED_CATEGORIES:
+        data_source_num = int(merchant['Source']['N'])
+        if merchant_category in APPROVED_CATEGORIES and data_source_num in data_sources:
             json_location_filtered_arr.append(merchant)
+            # if data_sources is None:
+            #     json_location_filtered_arr.append(merchant)
+            #     continue
+            # elif data_source_num in data_sources:
+            #     json_location_filtered_arr.append(merchant)
+
     json_result['locations'] = json_location_filtered_arr
 
     print "after cleaning"
@@ -110,7 +118,8 @@ def condense_offer_description(text):
 # Convert a json_reply from dynamodb into a telegram markdown reply
 def format_json_response(json_response):
     if json_response is None or len(json_response['locations']) == 0:
-        return "Sorry, there are no results :("
+        print "Sorry, there are no results :("
+        return "Sorry, there are no results :(", []
 
     locations = json_response
 
@@ -142,13 +151,13 @@ def format_json_response(json_response):
         # Print the data source
         if data_source == 1:
             output_string = output_string + "[(Entertainer)](" + str(additional_details['SourceWebsite']) + ")"
-            sources_available.add("ENTR")
+            sources_available.add(1)
         elif data_source == 2:
             output_string = output_string + "[(Citi)](" + str(additional_details['SourceWebsite']) + ")"
-            sources_available.add("CITI")
+            sources_available.add(2)
         elif data_source == 3:
             output_string = output_string + "[(OCBC)](" + str(additional_details['SourceWebsite']) + ")"
-            sources_available.add("OCBC")
+            sources_available.add(3)
 
 
         # Print additional info about discount/deal
@@ -163,4 +172,4 @@ def format_json_response(json_response):
 
     # Add in the onemap_url
     output_string = "*Cheapo found*[ ](" + onemap_url + ")*" + str(json_response['totalItems']) + " results in a " + str(json_response['searchRadius']) + "m radius!*\nDisplaying results " + str(json_response['startItemNumber']) + " to " + str(json_response['endItemNumber']) + "\n\n" + output_string
-    return output_string, sources_available
+    return output_string, list(sources_available)

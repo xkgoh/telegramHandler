@@ -32,33 +32,57 @@ def invoke_lambda_function(function_name, invocation_type, payload_string):
 # Create the reply markup keyboard based on the page number
 def create_reply_keyboard_page_markup(current_page, max_page, cur_radius, sources_available):
     print "Current Page: " + str(current_page) + " Max Page:" + str(max_page)
-    if current_page == max_page == 1 or max_page == 0:  # If there is only 1 page
+    if max_page == 0:
         return {}
+
     page_number_buttons_arr = []
     radius_buttons_arr = []
     source_buttons_arr = []
 
-    if 1 < current_page < max_page:
-        page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page-1), current_page-1))
-        page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page+1), current_page+1))
-    elif current_page == 1:  # If first page
-        page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page+1), current_page+1))
-    elif current_page == max_page:  # If last page
-        page_number_buttons_arr.append(create_inline_keyboard_button("Page " + str(current_page - 1), current_page - 1))
+    check_mark_emoji = u'\U00002705'  # check mark for filter
+    cross_mark_emoji = u'\U0000274E'  # cross mark for cancel filter
 
-    if cur_radius > RADIUS_CHANGE:
-        radius_buttons_arr.append(create_inline_keyboard_button("- Radius", cur_radius-RADIUS_CHANGE))
-    if cur_radius < MAX_SEARCH_RADIUS:
-        radius_buttons_arr.append(create_inline_keyboard_button("+ Radius", cur_radius+RADIUS_CHANGE))
+    if current_page != max_page != 1:  # If there is only 1 page or no contents
+        if 1 < current_page < max_page:
+            page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page-1), current_page-1))
+            page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page+1), current_page+1))
+        elif current_page == 1:  # If first page
+            page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page+1), current_page+1))
+        elif current_page == max_page:  # If last page
+            page_number_buttons_arr.append(create_inline_keyboard_button("Page " + str(current_page - 1), current_page - 1))
 
-    for sources in sources_available:
-        source_buttons_arr.append(create_inline_keyboard_button(sources, sources))
+    if len(sources_available) > 0:
+
+        if cur_radius > RADIUS_CHANGE:
+            radius_buttons_arr.append(create_inline_keyboard_button("- Radius", cur_radius-RADIUS_CHANGE))
+        if cur_radius < MAX_SEARCH_RADIUS:
+            radius_buttons_arr.append(create_inline_keyboard_button("+ Radius", cur_radius+RADIUS_CHANGE))
+
+        if 1 in sources_available:
+            source_buttons_arr.append(create_inline_keyboard_button(check_mark_emoji + " ENTR", "ENTR"))
+        else:
+            source_buttons_arr.append(create_inline_keyboard_button(cross_mark_emoji + " ENTR", "ENTR"))
+
+        if 2 in sources_available:
+            source_buttons_arr.append(create_inline_keyboard_button(check_mark_emoji + " CITI", "CITI"))
+        else:
+            source_buttons_arr.append(create_inline_keyboard_button(cross_mark_emoji + " CITI", "CITI"))
+
+        if 3 in sources_available:
+            source_buttons_arr.append(create_inline_keyboard_button(check_mark_emoji + " OCBC", "OCBC"))
+        else:
+            source_buttons_arr.append(create_inline_keyboard_button(cross_mark_emoji + " OCBC", "OCBC"))
 
     reply_markup = {"inline_keyboard": [page_number_buttons_arr, radius_buttons_arr, source_buttons_arr]}
     return reply_markup
 
 def create_inline_keyboard_button(button_data, callback_data):
     return {"text": button_data, "callback_data": callback_data}
+
+def update_source_filters(json_response, filter_value):
+    json_response['sourceFilter'] = filter_value
+    return json_response
+
 
 
 def lambda_handler(event, context):
@@ -71,36 +95,99 @@ def lambda_handler(event, context):
             reply_url = BASE_URL + "/editMessageText"
             source_message_id = data["callback_query"]["message"]["message_id"]
             source_chat_id = data["callback_query"]["message"]["chat"]["id"]
-            callback_query_data = int(data["callback_query"]["data"])
-            if callback_query_data >= 250:
-                search_radius = callback_query_data
-                print "SEARCH RADIUS CHANGE " + str(search_radius)
+            callback_query_data = data["callback_query"]["data"]
+
+            cached_message = telegramHandlerDBWriter.get_from_result_cache(source_chat_id)
+            cached_json_reply = json.loads(cached_message['Result'])
+            data_sources = cached_json_reply['sourceFilter']
+            search_center_details = {"latitude": cached_json_reply["searchCenterLatitude"],
+                                     "longitude": cached_json_reply["searchCenterLongitude"]}
+
+            if str(callback_query_data).isdigit():
+                callback_query_data = int(callback_query_data)
+
+                if callback_query_data >= 250:  # If it involves changes to the radius
+                    search_radius = callback_query_data
+                    print "SEARCH RADIUS CHANGE " + str(search_radius)
+                    current_page = 1
+                    # json_input = message["location"]
+                    # json_input["searchRadius"] = 800
+                    # reply_item = telegramHandlerDBWriter.get_from_result_cache(source_chat_id)
+                    # cached_json_reply = json.loads(reply_item['Result'])
+                    # print "RESULT IS "
+                    # print cached_json_reply
+                    # search_details = {}
+                    # search_details['latitude'] = cached_json_reply['searchCenterLatitude']
+                    # search_details['longitude'] = cached_json_reply['searchCenterLongitude']
+                    search_center_details['searchRadius'] = int(search_radius)
+
+                    # Execute another search with the new radius
+                    json_response = invoke_lambda_function("queryGeoDatabase", "RequestResponse",
+                                                           json.dumps(search_center_details))
+                    json_response = filter_merchant_category(json_response, [1, 2, 3])
+                    json_response = sort_results_by_distance(json_response, search_center_details)
+                    json_response = update_source_filters(json_response, [1, 2, 3])
+                    telegramHandlerDBWriter.write_to_results_cache(source_chat_id, json_response)
+
+                else:  # If its moving to the next page
+                    current_page = callback_query_data
+                    json_response = cached_json_reply
+
+
+            else:  # If filter of the data source
+                callback_query_data = str(callback_query_data)
+
+                if callback_query_data == "ENTR":
+                    if 1 not in data_sources:
+                        data_sources.append(1)
+                    elif len(data_sources) > 1:
+                        data_sources.remove(1)
+                    else:
+                        reply_url = BASE_URL + "/answerCallbackQuery"
+                        callback_query_id = data["callback_query"]["id"]
+                        reply_data = {"callback_query_id": callback_query_id}
+                        requests.post(reply_url, reply_data)
+                        print "executed callback query"
+                        return {"statusCode": 200}
+
+                if callback_query_data == "CITI":
+                    if 2 not in data_sources:
+                        data_sources.append(2)
+                    elif len(data_sources) > 1:
+                        data_sources.remove(2)
+                    else:
+                        reply_url = BASE_URL + "/answerCallbackQuery"
+                        callback_query_id = data["callback_query"]["id"]
+                        reply_data = {"callback_query_id": callback_query_id}
+                        requests.post(reply_url, reply_data)
+                        print "executed callback query"
+                        return {"statusCode": 200}
+
+                if callback_query_data == "OCBC":
+                    if 3 not in data_sources:
+                        data_sources.append(3)
+                    elif len(data_sources) > 1:
+                        data_sources.remove(3)
+                    else:
+                        reply_url = BASE_URL + "/answerCallbackQuery"
+                        callback_query_id = data["callback_query"]["id"]
+                        reply_data = {"callback_query_id": callback_query_id}
+                        requests.post(reply_url, reply_data)
+                        print "executed callback query"
+                        return {"statusCode": 200}
+
                 current_page = 1
-                # json_input = message["location"]
-                # json_input["searchRadius"] = 800
                 reply_item = telegramHandlerDBWriter.get_from_result_cache(source_chat_id)
-                cached_json_reply = json.loads(reply_item['Result'])
-                print "RESULT IS "
-                print cached_json_reply
-                search_details = {}
-                search_details['latitude'] = cached_json_reply['searchCenterLatitude']
-                search_details['longitude'] = cached_json_reply['searchCenterLongitude']
-                search_details['searchRadius'] = int(search_radius)
-
-                json_response = invoke_lambda_function("queryGeoDatabase", "RequestResponse",
-                                                       json.dumps(search_details))
-                json_response = filter_merchant_category(json_response)
-                json_response = sort_results_by_distance(json_response, search_details)
-                telegramHandlerDBWriter.write_to_results_cache(source_chat_id, json_response)
-
-            else:
-                current_page = callback_query_data
-                reply_item = telegramHandlerDBWriter.get_from_result_cache(source_chat_id)
-                print "reply is"
-                print reply_item
                 json_response = json.loads(reply_item['Result'])
+                json_response = update_source_filters(json_response, data_sources)
+                telegramHandlerDBWriter.write_to_results_cache(source_chat_id, json_response)  # Update the cache with the latest source filter
+
             print "Trying to paginate "
             print json_response
+
+            json_response = filter_merchant_category(json_response, data_sources)
+            json_response = sort_results_by_distance(json_response, search_center_details)
+
             json_response = paginate_results(json_response, current_page)
             # markdown_reply = format_json_response(json_response, message["location"], search_parameters['radius'],
             #                                       original_merchant_length)
@@ -110,8 +197,11 @@ def lambda_handler(event, context):
             # print "mark down reply is"
             # print markdown_reply
 
+            print "paginate 100"
+
             reply_markup = create_reply_keyboard_page_markup(current_page, int(math.ceil(float(json_response['totalItems'])/float(MAX_NUM_RESULTS_PER_PAGE))), int(json_response['searchRadius']), sources_available)
 
+            print "paginate 200"
 
             reply_data = {"chat_id": source_chat_id, "message_id": source_message_id, "text": markdown_reply.encode("utf8"), "parse_mode": "markdown", "reply_markup": json.dumps(reply_markup)}
             post_reply = requests.post(reply_url, reply_data)
@@ -175,9 +265,10 @@ def lambda_handler(event, context):
             # json_response = invoke_lambda_function("queryGeoDatabase", "RequestResponse",
             #                                        json.dumps(json_input))
             print "Lambda client invoked"
-            json_response = filter_merchant_category(json_response)
+            json_response = filter_merchant_category(json_response, [1, 2, 3])
             original_merchant_length = len(json_response['locations'])
             json_response = sort_results_by_distance(json_response, message["location"])
+            json_response = update_source_filters(json_response, [1, 2, 3])
             telegramHandlerDBWriter.write_to_results_cache(chat_id, json_response)
             json_response = paginate_results(json_response, 1)
 
@@ -216,7 +307,7 @@ def lambda_handler(event, context):
             markdown_reply, sources_available = format_json_response(json_response)
 
             # print markdown_reply
-            print "size of markdown reply" + str(sys.getsizeof(markdown_reply))
+            print "sources availabel are " + str(sources_available)
 
             # reply_markup={"inline_keyboard":[[{"text": "Page 2", "callback_data": 2}]]}
             print "total item " + str(json_response['totalItems'])
