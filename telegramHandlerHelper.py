@@ -1,6 +1,8 @@
 from geopy.distance import geodesic
 import json
 import re
+import os
+import logging
 
 APPROVED_CATEGORIES = [1]
 MAX_NUM_RESULTS_PER_PAGE = 20  # Max permited is 26, the number of letters in the alphabets
@@ -9,6 +11,17 @@ MAX_SEARCH_RADIUS = 5000
 SOURCE_DESC_NUM_MAP = {"ENTR": 1, "CITI": 2, "OCBC": 3}
 SOURCE_NUM_DESC_MAP = {1: "ENTR", 2: "CITI", 3: "OCBC"}
 SOURCE_NUM_FULLDESC_MAP = {1: "Entertainer", 2: "Citi", 3: "OCBC"}
+
+# Logging configurations
+LOGGING_LEVEL = int(os.environ['LOGGING_LEVEL'])
+logger = logging.getLogger()
+logger.setLevel(LOGGING_LEVEL)
+
+# Emojis
+location_emoji = u'\U0001F4CD'  # Location pin
+check_mark_emoji = u'\U00002705'  # check mark for filter
+cross_mark_emoji = u'\U0000274E'  # cross mark for cancel filter
+red_cross_mark_emoji = u'\U0000274C'  # RED cross mark for result not available
 
 
 # A. Distance Related Methods #########
@@ -23,7 +36,7 @@ def compute_distance(latitude_A, longitude_A, latitude_B, longitude_B):
 
 # Filter merchant details based on the top_N closest merchant from the center
 def sort_results_by_distance(json_response, center_lat_lng):
-    print "Executing sorting by distance"
+    logger.debug("Sorting results by distance")
     json_result = {'searchRadius': json_response['searchRadius'],
                     'searchCenterLatitude': center_lat_lng['latitude'],
                     'searchCenterLongitude': center_lat_lng['longitude']}
@@ -45,6 +58,7 @@ def sort_results_by_distance(json_response, center_lat_lng):
         json_location_sorted_arr.append(location_temp_arr[i][1])
 
     json_result['locations'] = json_location_sorted_arr
+    logger.debug("Sort by distance successful")
     return json_result
 
 
@@ -71,9 +85,7 @@ def filter_merchant_source_and_category(json_response, sources_filter=None):  # 
 
 # Obtain the results for a given page number from the entire result set
 def paginate_results(json_response, page_number):
-    print "Paginating results."
-    # print json_response
-    # print type(json_response)
+    logger.debug("Paginating results.")
     json_result = {'searchRadius': json_response['searchRadius'],
                     'searchCenterLatitude': json_response['searchCenterLatitude'],
                     'searchCenterLongitude': json_response['searchCenterLongitude']}
@@ -85,7 +97,7 @@ def paginate_results(json_response, page_number):
     if (start_index == end_index and start_index == len(json_response['locations'])):
         json_result['locations'] = []
         json_result['totalItems'] = 0
-        print "No contents for this page"
+        logger.debug("No contents for this page")
     else:
         for i in range(start_index, end_index):
             json_location_temp_arr.append(json_response['locations'][i])
@@ -93,7 +105,7 @@ def paginate_results(json_response, page_number):
         json_result['startItemNumber'] = start_index + 1
         json_result['endItemNumber'] = end_index
         json_result['totalItems'] = len(json_response['locations'])
-        print "Paginating completed."
+        logger.debug("Paginating completed.")
     print json_result
     return json_result
 
@@ -114,10 +126,18 @@ def condense_offer_description(text):
     return text.strip()
 
 
+def update_source_filters(json_response, sources_filter, sources_available):
+    sources_filter_set, sources_available_set = set(sources_filter), set(sources_available)
+    json_response['sourcesFilter'] = list(sources_filter_set.intersection(sources_available_set))  # Filtered values can only contain values from the original sources
+    json_response['sourcesAvailable'] = sources_available
+    return json_response
+
+
 # Convert a json_reply from dynamodb into a telegram markdown reply
 def format_json_response(json_response):
+    logger.debug("Formatting JSON response.")
     if json_response is None or len(json_response['locations']) == 0:
-        print "Sorry, there are no results :("
+        logger.debug("Sorry, there are no results to format.")
         return "Sorry, there are no results :("
 
     locations = json_response
@@ -130,7 +150,6 @@ def format_json_response(json_response):
     output_string = ""
     counter = 'A'
     marker_colour = "144,238,144"  # Light green colour
-    location_emoji = u'\U0001F4CD'  # Location pin
 
     for location in locations['locations']:
 
@@ -153,30 +172,23 @@ def format_json_response(json_response):
         if additional_details.get('OfferDetails') and len(str(additional_details['OfferDetails'])) < 100:
             output_string = output_string + " - " + condense_offer_description(str(additional_details['OfferDetails']))
         output_string = output_string + "\n"
-        # if counter == 'Z':
-        #     counter = 'a'
-        # if counter == 'z':
-        #     break
         counter = chr(ord(counter)+1) # Increment to the next alphabet
 
     # Add in the onemap_url
     output_string = "*Cheapo found*[ ](" + onemap_url + ")*" + str(json_response['totalItems']) + " results in a " + str(json_response['searchRadius']) + "m radius!*\nDisplaying results " + str(json_response['startItemNumber']) + " to " + str(json_response['endItemNumber']) + "\n\n" + output_string
-    return output_string #, list(sources_available)
+    logger.debug("Formatting JSON response completed.")
+    return output_string
 
 
 # D. Keyboard Formatting Related Methods
 
 # Create the reply markup keyboard based on the page number
 def create_reply_keyboard_page_markup(current_page, max_page, cur_radius, sources_filter, sources_available):
-    print "Current Page: " + str(current_page) + " Max Page:" + str(max_page)
+    logger.debug("Creating reply keyboard markup. Current Page: " + str(current_page) + " Max Page:" + str(max_page))
     if max_page == 0:
         return {}
 
     page_number_buttons_arr, radius_buttons_arr, source_filter_buttons_arr = [], [], []
-
-    check_mark_emoji = u'\U00002705'  # check mark for filter
-    cross_mark_emoji = u'\U0000274E'  # cross mark for cancel filter
-    red_cross_mark_emoji = u'\U0000274C'  # RED cross mark for result not available
 
     if not current_page == max_page == 1:  # If there is not only 1 page, print page buttons
         if 1 < current_page < max_page:
@@ -205,6 +217,7 @@ def create_reply_keyboard_page_markup(current_page, max_page, cur_radius, source
             source_filter_buttons_arr.append(create_inline_keyboard_button(emoji_selected + " " + SOURCE_NUM_DESC_MAP.get(x), description_selected))
 
     reply_markup = {"inline_keyboard": [page_number_buttons_arr, radius_buttons_arr, source_filter_buttons_arr]}
+    logger.debug("Successfully created reply keyboard markup.")
     return reply_markup
 
 
