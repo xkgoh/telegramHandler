@@ -3,20 +3,25 @@ import requests
 import json
 import os
 import math
+import logging
 
 import telegramHandlerDBWriter
-from telegramHandlerHelper import sort_results_by_distance, filter_merchant_source_and_category, paginate_results, format_json_response, create_reply_keyboard_page_markup
+from telegramHandlerHelper import sort_results_by_distance, filter_merchant_source_and_category, paginate_results, \
+    format_json_response, create_reply_keyboard_page_markup, update_source_filters
 
-
-RADIUS_CHANGE = 250  # Increasing or decreasing the radius changes it by 250 each time
-MAX_SEARCH_RADIUS = 5000
-MAX_NUM_RESULTS_PER_PAGE = 20
-APPROVED_USER_STR = os.environ['APPROVED_USER_LIST']
+# Global variables
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
+CHEAPO_CHAT_ID = int(os.environ['CHEAPO_CHAT_ID'])
+REGISTRATION_PASSPHRASE = os.environ['REGISTRATION_PASSPHRASE']
 BASE_URL = "https://api.telegram.org/bot{}".format(TOKEN)
 SOURCE_DESC_NUM_MAP = {"ENTR": 1, "CITI": 2, "OCBC": 3}
 SOURCE_NUM_DESC_MAP = {1: "ENTR", 2: "CITI", 3: "OCBC"}
+MAX_NUM_RESULTS_PER_PAGE = 20
 
+# Logging configurations
+LOGGING_LEVEL = int(os.environ['LOGGING_LEVEL'])
+logger = logging.getLogger()
+logger.setLevel(LOGGING_LEVEL)
 
 
 # Invoke a lambda function and return the json data returned by the lambda function
@@ -27,12 +32,22 @@ def invoke_lambda_function(function_name, invocation_type, payload_string):
     return json.loads(invoke_response['Payload'].read())
 
 
+def authenticate_user(data, sender_telegram_id, first_name):
+    if telegramHandlerDBWriter.get_from_user_table(sender_telegram_id) is None:
+        if "text" in data["message"] and REGISTRATION_PASSPHRASE in str(data["message"]["text"]).lower():
+            if telegramHandlerDBWriter.write_to_user_table(sender_telegram_id, first_name) == True:
+                response = "Registration for " + str(sender_telegram_id) + " " + first_name + " successful."
+                data = {"text": response.encode("utf8"), "chat_id": sender_telegram_id}
+                requests.post(BASE_URL + "/sendMessage", data)
+                logger.info(str(sender_telegram_id) + " " + first_name + " successfully registered.")
+        return False
+    return True
+
+
 def acknowledge_callback_query(callback_query_id):
-    print "executing call back query"
-    reply_url = BASE_URL + "/answerCallbackQuery"
     reply_data = {"callback_query_id": callback_query_id}
-    requests.post(reply_url, reply_data)
-    print "executed callback query"
+    requests.post(BASE_URL + "/answerCallbackQuery", reply_data)
+    logger.info("Callback query acknowledged.")
     return {"statusCode": 200}
 
 
@@ -47,14 +62,8 @@ def reply_or_edit_message_text(json_response, current_page, sources_filter, sour
         reply_data["message_id"] = source_message_id
         function_name = "/editMessageText"
     post_reply = requests.post(BASE_URL + function_name, reply_data)
-    print str(post_reply.text)
-
-
-def update_source_filters(json_response, sources_filter, sources_available):
-    sources_filter_set, sources_available_set = set(sources_filter), set(sources_available)
-    json_response['sourcesFilter'] = list(sources_filter_set.intersection(sources_available_set))  # Filtered values can only contain values from the original sources
-    json_response['sourcesAvailable'] = sources_available
-    return json_response
+    logger.info("Message replied / edited.")
+    logger.debug(str(post_reply.text))
 
 
 def update_result_cache(json_response, sources_filter, sources_available, source_chat_id, search_center_details=None):
@@ -112,74 +121,59 @@ def process_callback_query(data):
         json_response = cached_json_reply  # There is no change to the json_response message
         original_sources_available, json_response = update_result_cache(json_response, data_sources, original_sources_available, source_chat_id, search_center_details=None)
 
-    print "Trying to paginate "
-    print json_response
+    logger.debug("Callback query task defined.")
+    logger.debug(json_response)
 
     json_response, sources_available = filter_merchant_source_and_category(json_response, data_sources)
     json_response = sort_results_by_distance(json_response, search_center_details)
     json_response = paginate_results(json_response, current_page)
-
-    print "paginate "
 
     reply_or_edit_message_text(json_response, current_page, sources_available, original_sources_available, source_chat_id, source_message_id, "EDIT")
 
     return acknowledge_callback_query(callback_query_id)
 
 
-
 def lambda_handler(event, context):
     try:
-        print "Initializaing Handler"
+        logger.info("Starting Lambda Handler")
         data = json.loads(event["body"])
-        print event
+
+        logger.debug("Event object received:")
+        logger.debug(event)
 
         if "callback_query" in data:
             return process_callback_query(data)
 
         # If it is replying to a message not sent by the chatbot, ignore it
         if "reply_to_message" in data["message"]:
-            if data["message"]["reply_to_message"]["from"]["id"] != 910668396:
-                print "not from chatbot"
+            if data["message"]["reply_to_message"]["from"]["id"] != CHEAPO_CHAT_ID:
+                logger.debug("Message not from Cheapo.")
                 return {"statusCode": 200}
 
         sender_telegram_id = data["message"]["from"]["id"]
         chat_id = data["message"]["chat"]["id"]
         chat_type = data["message"]["chat"]["type"]
         source_message_id = data["message"]["message_id"]
-        print data
+        first_name = data["message"]["from"]["first_name"]  # Reply the user with his/her details
 
-        # Get list of approved IDs
-        APPROVED_USER_LIST = map(long, APPROVED_USER_STR.split(", "))
-
-        # Get telegram token handler
-        # BASE_URL = "https://api.telegram.org/bot{}".format(TOKEN)
-        reply_url = BASE_URL + "/sendMessage"
-
-        # Check the telegram ID to see if user if approved
-        if sender_telegram_id not in APPROVED_USER_LIST:
-            if "get id" in str(data["message"]["text"]).lower():  # If message contains the string "get id"
-                first_name = data["message"]["from"]["first_name"]  # Reply the user with his/her details
-                response = "Your details are:{}".format('\n' + str(sender_telegram_id) + '\n' + str(first_name))
-                data = {"text": response.encode("utf8"), "chat_id": sender_telegram_id}
-                requests.post(reply_url, data)
+        if authenticate_user(data, sender_telegram_id, first_name) is False:
             return {"statusCode": 200}
 
-        response_string = ''
-
         message = data["message"]
+
         if "text" in message:
+            logger.debug("Text message detected.")
+            reply_url = BASE_URL + "/sendMessage"
             if chat_type == "group" and str(message["text"]).lower() == "/hello":
                 data = {"text": ("Hello I am Cheapo! Reply this message to talk to me!").encode("utf8"), "chat_id": chat_id, "reply_to_message_id": source_message_id}
                 requests.post(reply_url, data)
             else:
-                data1 = invoke_lambda_function("blankLambda", "RequestResponse", json.dumps(message["text"]))
-
-                data = {"text": (str(data1)+" Text").encode("utf8"), "chat_id": chat_id, "reply_to_message_id": source_message_id}
+                data = {"text": (" Hello I am Cheapo! Send me a location to get started!").encode("utf8"), "chat_id": chat_id, "reply_to_message_id": source_message_id}
                 requests.post(reply_url, data)
-                print "Lambda client invoked"
-                print data1
+            logger.debug("Text message processed.")
 
         if "location" in message:
+            logger.debug("Location message detected.")
             json_response = invoke_lambda_function("queryGeoDatabase", "RequestResponse", json.dumps(message["location"]))
 
             # There is no filter for the initial result, hence is all possible sources
@@ -188,10 +182,10 @@ def lambda_handler(event, context):
                                                                    search_center_details=message["location"])
             json_response = paginate_results(json_response, 1)
             reply_or_edit_message_text(json_response, 1, sources_available, sources_available, chat_id, source_message_id, "REPLY")
-            print "Lambda client invoked"
+            logger.debug("Location message processed.")
 
     except Exception as e:
-        print "exception occured"
-        print(str(e))
+        logger.error(str(e))
 
+    logger.info("Terminating Lambda Handler")
     return {"statusCode": 200}
