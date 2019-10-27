@@ -3,7 +3,12 @@ import json
 import re
 
 APPROVED_CATEGORIES = [1]
-MAX_NUM_RESULTS_PER_PAGE = 20
+MAX_NUM_RESULTS_PER_PAGE = 20  # Max permited is 26, the number of letters in the alphabets
+RADIUS_CHANGE = 250  # Increasing or decreasing the radius changes it by 250 each time
+MAX_SEARCH_RADIUS = 5000
+SOURCE_DESC_NUM_MAP = {"ENTR": 1, "CITI": 2, "OCBC": 3}
+SOURCE_NUM_DESC_MAP = {1: "ENTR", 2: "CITI", 3: "OCBC"}
+SOURCE_NUM_FULLDESC_MAP = {1: "Entertainer", 2: "Citi", 3: "OCBC"}
 
 
 # A. Distance Related Methods #########
@@ -40,34 +45,28 @@ def sort_results_by_distance(json_response, center_lat_lng):
         json_location_sorted_arr.append(location_temp_arr[i][1])
 
     json_result['locations'] = json_location_sorted_arr
-    print json_result
     return json_result
 
 
 # B. Filter Related Methods #########
 
-# Filter the merchant categories to that listed in the APPROVED_CATEGORY variable
-def filter_merchant_category(json_response, data_sources):
+# Filter the merchant categories to that listed in the APPROVED_CATEGORY variable, and return the merchant sources that contains it
+def filter_merchant_source_and_category(json_response, sources_filter=None):  # Optional parameter that further filter by sources
     json_result = {'searchRadius': json_response['searchRadius']}
     json_location_filtered_arr = []
-
+    sources_available = set()
 
     for merchant in json_response['locations']:
         merchant_category = int(merchant['Type']['N'])
         data_source_num = int(merchant['Source']['N'])
-        if merchant_category in APPROVED_CATEGORIES and data_source_num in data_sources:
-            json_location_filtered_arr.append(merchant)
-            # if data_sources is None:
-            #     json_location_filtered_arr.append(merchant)
-            #     continue
-            # elif data_source_num in data_sources:
-            #     json_location_filtered_arr.append(merchant)
+        # if merchant_category in APPROVED_CATEGORIES and data_source_num in data_sources:
+        if merchant_category in APPROVED_CATEGORIES:
+            if sources_filter is None or data_source_num in sources_filter:
+                json_location_filtered_arr.append(merchant)
+                sources_available.add(data_source_num)
 
     json_result['locations'] = json_location_filtered_arr
-
-    print "after cleaning"
-    print json_result
-    return json_result
+    return json_result, list(sources_available)
 
 
 # Obtain the results for a given page number from the entire result set
@@ -119,7 +118,7 @@ def condense_offer_description(text):
 def format_json_response(json_response):
     if json_response is None or len(json_response['locations']) == 0:
         print "Sorry, there are no results :("
-        return "Sorry, there are no results :(", []
+        return "Sorry, there are no results :("
 
     locations = json_response
 
@@ -132,7 +131,6 @@ def format_json_response(json_response):
     counter = 'A'
     marker_colour = "144,238,144"  # Light green colour
     location_emoji = u'\U0001F4CD'  # Location pin
-    sources_available = set()
 
     for location in locations['locations']:
 
@@ -149,27 +147,66 @@ def format_json_response(json_response):
         additional_details = json.loads(str(location['AdditionalDetails']['S']))
 
         # Print the data source
-        if data_source == 1:
-            output_string = output_string + "[(Entertainer)](" + str(additional_details['SourceWebsite']) + ")"
-            sources_available.add(1)
-        elif data_source == 2:
-            output_string = output_string + "[(Citi)](" + str(additional_details['SourceWebsite']) + ")"
-            sources_available.add(2)
-        elif data_source == 3:
-            output_string = output_string + "[(OCBC)](" + str(additional_details['SourceWebsite']) + ")"
-            sources_available.add(3)
-
+        output_string = output_string + "[(" + SOURCE_NUM_FULLDESC_MAP.get(data_source) + ")](" + str(additional_details['SourceWebsite']) + ")"
 
         # Print additional info about discount/deal
         if additional_details.get('OfferDetails') and len(str(additional_details['OfferDetails'])) < 100:
             output_string = output_string + " - " + condense_offer_description(str(additional_details['OfferDetails']))
         output_string = output_string + "\n"
-        if counter == 'Z':
-            counter = 'a'
-        if counter == 'z':
-            break
+        # if counter == 'Z':
+        #     counter = 'a'
+        # if counter == 'z':
+        #     break
         counter = chr(ord(counter)+1) # Increment to the next alphabet
 
     # Add in the onemap_url
     output_string = "*Cheapo found*[ ](" + onemap_url + ")*" + str(json_response['totalItems']) + " results in a " + str(json_response['searchRadius']) + "m radius!*\nDisplaying results " + str(json_response['startItemNumber']) + " to " + str(json_response['endItemNumber']) + "\n\n" + output_string
-    return output_string, list(sources_available)
+    return output_string #, list(sources_available)
+
+
+# D. Keyboard Formatting Related Methods
+
+# Create the reply markup keyboard based on the page number
+def create_reply_keyboard_page_markup(current_page, max_page, cur_radius, sources_filter, sources_available):
+    print "Current Page: " + str(current_page) + " Max Page:" + str(max_page)
+    if max_page == 0:
+        return {}
+
+    page_number_buttons_arr, radius_buttons_arr, source_filter_buttons_arr = [], [], []
+
+    check_mark_emoji = u'\U00002705'  # check mark for filter
+    cross_mark_emoji = u'\U0000274E'  # cross mark for cancel filter
+    red_cross_mark_emoji = u'\U0000274C'  # RED cross mark for result not available
+
+    if not current_page == max_page == 1:  # If there is not only 1 page, print page buttons
+        if 1 < current_page < max_page:
+            page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page-1), current_page-1))
+            page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page+1), current_page+1))
+        elif current_page == 1:  # If first page
+            page_number_buttons_arr.append(create_inline_keyboard_button("Page "+str(current_page+1), current_page+1))
+        elif current_page == max_page:  # If last page
+            page_number_buttons_arr.append(create_inline_keyboard_button("Page " + str(current_page - 1), current_page - 1))
+
+    if (len(sources_filter) and len(sources_available)) > 0:  # If there are sources available for filter, print it
+
+        if cur_radius > RADIUS_CHANGE:
+            radius_buttons_arr.append(create_inline_keyboard_button("- Radius", cur_radius-RADIUS_CHANGE))
+        if cur_radius < MAX_SEARCH_RADIUS:
+            radius_buttons_arr.append(create_inline_keyboard_button("+ Radius", cur_radius+RADIUS_CHANGE))
+
+        for x in range(1, 4):
+            if x not in sources_available:
+                emoji_selected, description_selected = red_cross_mark_emoji, "NIL"
+            elif x in sources_filter:
+                emoji_selected, description_selected = check_mark_emoji, SOURCE_NUM_DESC_MAP.get(x)
+            else:
+                emoji_selected, description_selected = cross_mark_emoji, SOURCE_NUM_DESC_MAP.get(x)
+
+            source_filter_buttons_arr.append(create_inline_keyboard_button(emoji_selected + " " + SOURCE_NUM_DESC_MAP.get(x), description_selected))
+
+    reply_markup = {"inline_keyboard": [page_number_buttons_arr, radius_buttons_arr, source_filter_buttons_arr]}
+    return reply_markup
+
+
+def create_inline_keyboard_button(button_data, callback_data):
+    return {"text": button_data, "callback_data": callback_data}
