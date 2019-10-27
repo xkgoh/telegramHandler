@@ -1,6 +1,6 @@
 # telegramHandler
 
-This folder contains part of the source code for the Cheapo! Telegram bot (@Cheapo_bot). Cheapo! is a telegram bot that returns the nearby deals given a location. It is currently deployed on AWS, running off a lambda function referenced by an endpoint, and using DynamoDB as its persistent storage layer.
+This folder contains part of the source code for the Cheapo! Telegram bot (@Cheapo_bot). Cheapo! is a telegram bot that returns the nearby deals given a location. She is currently deployed on AWS, running off a lambda function referenced by an endpoint, using DynamoDB as its persistent storage layer. Cheapo! currently serves registered users, and registration can be done by sending a passphrase to her.
 
 The folder contains the following pieces of code:
 1. telegramHandler.py - Contains the main function where the execution begins
